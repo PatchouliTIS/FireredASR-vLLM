@@ -101,6 +101,12 @@ class LoggingStatLogger(StatLoggerBase):
 
     def log(self):
         now = time.monotonic()
+
+        # <abs> Skip the logging if no progress is made.
+        #
+        if not self.num_prompt_tokens and not self.num_generation_tokens:
+            return
+
         prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
         generation_throughput = self._get_throughput(
             self.num_generation_tokens, now)

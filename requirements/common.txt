@@ -2,7 +2,12 @@ regex # Replace re for higher-performance regex matching
 cachetools
 psutil
 sentencepiece  # Required for LLaMA tokenizer.
-numpy
+
+# <abs> Restrict the numpy version to be 1.x.
+#
+# Reference: https://github.com/triton-inference-server/server/issues/7391
+numpy < 2
+
 requests >= 2.26.0
 tqdm
 blake3
