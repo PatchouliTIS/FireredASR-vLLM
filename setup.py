@@ -16,13 +16,12 @@ import torch
 from packaging.version import Version, parse
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME
 
-# <abs> Comment out the `get_version`, since we are using git submodules, automatic
-# version detection is not supported
+# <abs> Comment out the `get_version`, since we are using git submodules,
+# automatic version detection is not supported
 #
 # from setuptools_scm import get_version
-
-from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME
 
 
 def load_module_from_path(module_name, path):
@@ -545,10 +544,17 @@ def get_vllm_version() -> str:
         else:
             cuda_version = str(get_nvcc_cuda_version())
             if cuda_version != MAIN_CUDA_VERSION:
-                cuda_version_str = cuda_version.replace(".", "")[:3]
+                # <abs>
+                #
+                # cuda_version_str = cuda_version.replace(".", "")[:3]
+                cuda_version.replace(".", "")[:3]
+
                 # skip this for source tarball, required for pypi
                 if "sdist" not in sys.argv:
-                    version += f"{sep}abo.cu{cuda_version_str}"
+                    # <abs>
+                    #
+                    # version += f"{sep}cu{cuda_version_str}"
+                    version += f"{sep}abo"
     elif _is_hip():
         # Get the Rocm Version
         rocm_version = get_rocm_version() or torch.version.hip

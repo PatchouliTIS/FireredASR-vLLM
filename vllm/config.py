@@ -3593,6 +3593,14 @@ def _get_and_verify_max_len(
                 raise ValueError(
                     f"{msg} To allow overriding this maximum, set "
                     "the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1")
+
+    logger.warning(
+        "Setting the derived max_model_len=%s according to key=%s "
+        "(derived_max_model_len=%s).",
+        int(max_model_len),
+        max_len_key,
+        int(derived_max_model_len),
+    )
     return int(max_model_len)
 
 
