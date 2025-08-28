@@ -4,6 +4,8 @@
 from typing import Callable, Optional, Union
 
 import torch
+# <abs> TensorRT-LLM FP8 Support
+from loguru import logger
 
 from vllm import _custom_ops as ops
 from vllm import envs
@@ -12,6 +14,34 @@ from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     GroupShape)
 from vllm.platforms import current_platform
+
+# <abs> TensorRT-LLM FP8 Support
+#
+try:
+    import tensorrt_llm  # noqa
+
+    logger.warning("TensorRT-LLM is available!")
+    IS_TRTLLM_AVAILABLE = True
+except ImportError:
+    logger.warning("TensorRT-LLM is not installed!")
+    IS_TRTLLM_AVAILABLE = False
+
+if IS_TRTLLM_AVAILABLE:
+    # Add a fake kernel for `quantize_e4m3_per_tensor``, so as to support
+    # `torch.compile`.
+    logger.warning(
+        "Registering a fake kernel for "
+        "`tensorrt_llm::quantize_e4m3_per_tensor` to support "
+        "`torch.compile` ...", )
+
+    @torch.library.register_fake("tensorrt_llm::quantize_e4m3_per_tensor")
+    def _(input: torch.Tensor):
+        return torch.empty_like(input).to(
+            torch.float8_e4m3fn), input.new_empty(
+                [1 for _ in range(input.dim())])
+
+
+# </abs>
 
 # Input scaling factors are no longer optional in _scaled_mm starting
 # from pytorch 2.5. Allocating a dummy tensor to pass as input_scale
@@ -290,6 +320,97 @@ def dispatch_w8a8_scaled_mm(
     # Normally, torch.scaled_mm supports per tensor weights + activations only
     # so fallback to naive if per channel or per token
     return torch_channelwise_w8a8_scaled_mm
+
+
+# <abs> TensorRT-LLM FP8 Support
+#
+class TrtllmFp8TensorLinearOp:
+
+    def apply(self, input, weight, bias, input_scale, weight_scale, out_dtype):
+        origin_shape = input.shape
+        origin_dtype = input.dtype
+        input = input.to(torch.bfloat16)
+
+        # Dynamic quantization
+        qinput, cur_input_scale = (
+            torch.ops.tensorrt_llm.quantize_e4m3_per_tensor(input))
+
+        cur_input_scale = cur_input_scale.to(torch.float32)
+        # This op does not support bias now.
+        if qinput.dim() == 3:
+            qinput = qinput.reshape(-1, qinput.shape[-1])
+
+        output = torch.ops.trtllm.cublas_scaled_mm(
+            qinput,
+            weight,
+            scale_a=cur_input_scale,
+            scale_b=weight_scale,
+            bias=None,
+            out_dtype=input.dtype,
+        )
+        output = output.to(origin_dtype)
+        if bias is not None:
+            output = output + bias
+
+        if output.dim() != len(origin_shape):
+            output_shape = list(origin_shape)
+            output_shape[-1] = output.shape[-1]
+            output = output.reshape(output_shape)
+        return output
+
+
+class TrtllmFp8BlockLinearOp:
+
+    def apply(self, input, weight, bias, input_scale, weight_scale, out_dtype,
+              param_value_orig_shape):
+        origin_shape = input.shape
+        origin_dtype = input.dtype
+        input = input.to(torch.bfloat16)
+
+        if input.dim() > 2:
+            input = input.reshape(-1, input.shape[-1])
+
+        # <abs> FP8 Block Alignment
+        #
+        if input.shape[-1] % 128 != 0:
+            input = torch.nn.functional.pad(
+                input,
+                (0, (input.shape[-1] + 127) // 128 * 128 - input.shape[-1]),
+                "constant",
+                0.0,
+            )
+
+        # </abs>
+
+        act_input_fp8, input_scale = torch.ops.trtllm.fp8_quantize_1x128(input)
+        output = torch.ops.trtllm.fp8_block_scaling_gemm(
+            act_input_fp8,
+            weight,
+            input_scale,
+            weight_scale,
+        )
+
+        # <abs> FP8 Block Alignment
+        #
+        if param_value_orig_shape[-2] % 128 != 0:
+            output = output[..., :param_value_orig_shape[-2]]
+
+        # </abs>
+
+        output = output.to(origin_dtype)
+
+        if bias is not None:
+            output = output + bias
+
+        if output.dim() != len(origin_shape):
+            output_shape = list(origin_shape)
+            output_shape[-1] = output.shape[-1]
+            output = output.reshape(output_shape)
+
+        return output
+
+
+# </abs>
 
 
 # TODO(luka): follow similar pattern for marlin and block-fp8-linear

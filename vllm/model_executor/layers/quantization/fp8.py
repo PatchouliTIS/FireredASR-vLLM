@@ -45,6 +45,12 @@ from vllm.utils import has_deep_gemm
 from vllm.utils.deep_gemm import is_blackwell_deep_gemm_used
 from vllm.utils.flashinfer import has_flashinfer_moe
 
+# <abs> TensorRT-LLM FP8 Support
+#
+from vllm.model_executor.layers.quantization.utils.w8a8_utils import (  # isort: skip
+    IS_TRTLLM_AVAILABLE, TrtllmFp8BlockLinearOp, TrtllmFp8TensorLinearOp)
+# </abs>
+
 if TYPE_CHECKING:
     from vllm.model_executor.models.utils import WeightsMapper
 
@@ -98,6 +104,17 @@ class Fp8Config(QuantizationConfig):
                                  f"{activation_scheme} activation scheme.")
         self.weight_block_size = weight_block_size
 
+        # <abs> DEBUG
+        #
+        from loguru import logger
+
+        logger.info(
+            f"Creating Fp8Config with {is_checkpoint_fp8_serialized=}, "
+            f"{activation_scheme=}, {ignored_layers=}, {weight_block_size=}.",
+        )
+
+        # </abs>
+
     @classmethod
     def get_name(cls) -> QuantizationMethods:
         return "fp8"
@@ -134,18 +151,54 @@ class Fp8Config(QuantizationConfig):
 
     def get_quant_method(self, layer: torch.nn.Module,
                          prefix: str) -> Optional["QuantizeMethodBase"]:
+
+        # <abs> DEBUG
+        from loguru import logger
+
         from vllm.attention.layer import Attention  # Avoid circular import
+
+        # <abs> DEBUG
+        #
+        logger.debug(
+            "Replacing type(layer)={layer_type} (prefix={prefix}) with its FP8 "
+            "equivalent ...",
+            layer_type=type(layer),
+            prefix=prefix,
+        )
+        # </abs>
 
         if isinstance(layer, LinearBase):
             if is_layer_skipped(prefix=prefix,
                                 ignored_layers=self.ignored_layers,
                                 fused_mapping=self.packed_modules_mapping):
+
+                # <abs> DEBUG
+                #
+                logger.debug(
+                    "Skipping the quantization as per the ignored "
+                    "layers={ignored_layers}!",
+                    ignored_layers=self.ignored_layers,
+                )
+                # </abs>
+
                 return UnquantizedLinearMethod()
             return Fp8LinearMethod(self)
         elif isinstance(layer, FusedMoE):
             return Fp8MoEMethod(self)
         elif isinstance(layer, Attention):
             return Fp8KVCacheMethod(self)
+
+        # <abs> DEBUG
+        #
+        else:
+            logger.debug(
+                "No quantization will be applied as the layer "
+                "type={layer_type} does not fall into any of the given "
+                "category.",
+                layer_type=type(layer),
+            )
+            # </abs>
+
         return None
 
     def get_cache_scale(self, name: str) -> Optional[str]:
@@ -208,17 +261,51 @@ class Fp8LinearMethod(LinearMethodBase):
                                            and current_platform.is_fp8_fnuz())
 
         self.block_quant = self.quant_config.weight_block_size is not None
-        self.act_q_static = self.quant_config.activation_scheme == "static"
-        # Use per-token quantization for better perf if dynamic and cutlass
-        if not self.act_q_static and cutlass_fp8_supported():
-            self.act_q_group_shape = GroupShape.PER_TOKEN
-        else:
-            self.act_q_group_shape = GroupShape.PER_TENSOR
 
-        self.fp8_linear = Fp8LinearOp(
-            act_quant_static=self.act_q_static,
-            act_quant_group_shape=self.act_q_group_shape,
-            cutlass_fp8_supported=cutlass_fp8_supported())
+        # <abs> TensorRT-LLM FP8 Support
+        #
+        # self.fp8_linear = Fp8LinearOp(
+        #     # Default to using per_token quantization if cutlass is supported
+        #     use_per_token_if_dynamic=cutlass_fp8_supported())
+        import os
+
+        from loguru import logger
+
+        # In the case when `block_quant` has not been specified, check the
+        # environment variable.
+        if weight_block_size := os.getenv("VLLM_FP8_BLOCK_QUANT", None):
+            self.block_quant = True
+            self.quant_config.weight_block_size = [
+                int(bs) for bs in weight_block_size.split(",")
+            ]
+            logger.warning(
+                "Using as weight_block_size={weight_block_size} (from "
+                "VLLM_FP8_BLOCK_QUANT).",
+                weight_block_size=self.quant_config.weight_block_size,
+            )
+
+        if IS_TRTLLM_AVAILABLE:
+            if self.block_quant:
+                logger.info("Using TensorRT-LLM FP8 kernel (per-block) ...")
+                self.fp8_linear = TrtllmFp8BlockLinearOp()
+            else:
+                logger.info("Using TensorRT-LLM FP8 kernel (per-tensor) ...")
+                self.fp8_linear = TrtllmFp8TensorLinearOp()
+        else:
+            logger.info("Using vLLM built-in FP8 kernel ...")
+            self.act_q_static = self.quant_config.activation_scheme == "static"
+            # Use per-token quantization for better perf if dynamic and cutlass
+            if not self.act_q_static and cutlass_fp8_supported():
+                self.act_q_group_shape = GroupShape.PER_TOKEN
+            else:
+                self.act_q_group_shape = GroupShape.PER_TENSOR
+
+            self.fp8_linear = Fp8LinearOp(
+                act_quant_static=self.act_q_static,
+                act_quant_group_shape=self.act_q_group_shape,
+                cutlass_fp8_supported=cutlass_fp8_supported())
+
+        # </abs>
 
     def create_weights(
         self,
@@ -344,28 +431,159 @@ class Fp8LinearMethod(LinearMethodBase):
         size_k_first = True
         # TODO(rob): refactor block quant into separate class.
         if self.block_quant:
-            assert self.quant_config.activation_scheme == "dynamic"
-            size_k_first = False
-            if current_platform.is_fp8_fnuz():
-                weight, weight_scale_inv, _ = \
-                    normalize_e4m3fn_to_e4m3fnuz(
-                        weight=layer.weight,
-                        weight_scale=layer.weight_scale_inv)
-            else:
-                weight = layer.weight.data
-                weight_scale_inv = layer.weight_scale_inv.data
 
-            weight = self._maybe_pad_weight(weight)
+            # <abs> TensorRT-LLM FP8 Suppport
+            #
+            if IS_TRTLLM_AVAILABLE:
+                assert not self.quant_config.is_checkpoint_fp8_serialized
 
-            # Torch.compile cannot use Parameter subclasses.
-            layer.weight = Parameter(weight, requires_grad=False)
-            layer.weight_scale_inv = Parameter(weight_scale_inv,
+                param_value = layer.weight.to(torch.float32)
+
+                fp8_min = torch.finfo(torch.float8_e4m3fn).min
+                fp8_max = torch.finfo(torch.float8_e4m3fn).max
+
+                block_size_m, block_size_n = self.quant_config.weight_block_size
+                rows, cols = param_value.shape[-2:]
+                # <abs> FP8 Block Alignment
+                #
+                # if rows % block_size_m != 0 or cols % block_size_n != 0:
+                #     raise ValueError(
+                #         f"Matrix dimensions ({rows}, {cols}) must be divisible "  # noqa: E501
+                #         f"by block sizes ({block_size_m}, {block_size_n})")
+                from loguru import logger
+
+                param_value_orig_shape = param_value.shape
+                if rows % block_size_m != 0 or cols % block_size_n != 0:
+                    param_value = torch.nn.functional.pad(
+                        input=param_value,
+                        pad=(
+                            0,
+                            (cols + block_size_n - 1) // block_size_n *
+                            block_size_n - cols,
+                            0,
+                            (rows + block_size_m - 1) // block_size_m *
+                            block_size_m - rows,
+                        ),
+                        mode="constant",
+                        value=0.0,
+                    )
+                    param_value_block_aligned_shape = param_value.shape
+                    logger.warning(
+                        "Aligning parameter of shape {param_value_orig_shape} "
+                        "to {param_value_block_aligned_shape}!",
+                        param_value_orig_shape=param_value_orig_shape,
+                        param_value_block_aligned_shape=
+                        param_value_block_aligned_shape,
+                    )
+                    rows, cols = param_value.shape[-2:]
+                else:
+                    param_value_block_aligned_shape = param_value_orig_shape
+
+                # </abs>
+
+                param_value = param_value.reshape(
+                    -1, rows // block_size_m, block_size_m,
+                    cols // block_size_n, block_size_n).permute(0, 1, 3, 2, 4)
+
+                # Calculate scaling factor for each block
+                max_abs = torch.amax(torch.abs(param_value), dim=(-1, -2))
+                scale = fp8_max / max_abs
+                scale_orig_shape = scale.shape
+                scale = scale.unsqueeze(-1).unsqueeze(-1)
+
+                @torch.compiler.disable()
+                def _quantize(param_value, scale, fp8_min, fp8_max):
+                    # Quantize the weights
+                    quantized_param = torch.clamp(
+                        param_value * scale,
+                        min=fp8_min,
+                        max=fp8_max,
+                    ).to(torch.float8_e4m3fn)
+
+                    quantized_param = quantized_param.permute(0, 1, 3, 2, 4)
+
+                    # <abs> FP8 Block Alignment
+                    #
+                    # # Reshape back to matrix shape
+                    # quantized_param = quantized_param.reshape(
+                    #     param_value_orig_shape)
+                    quantized_param = quantized_param.reshape(
+                        param_value_block_aligned_shape)
+
+                    # </abs>
+
+                    # Reshape scale to match the number of blocks
+                    scale = scale.reshape(
+                        scale_orig_shape).squeeze().reciprocal()
+
+                    return quantized_param, scale
+
+                qweight, weight_scale = _quantize(param_value, scale, fp8_min,
+                                                  fp8_max)
+                layer.weight = Parameter(qweight, requires_grad=False)
+                layer.weight_scale = Parameter(weight_scale,
                                                requires_grad=False)
+                layer.input_scale = None
+
+                # <abs> FP8 Block Alignment
+                layer.param_value_orig_shape = param_value_orig_shape
+
+            else:
+                # </abs>
+                assert self.quant_config.activation_scheme == "dynamic"
+                size_k_first = False
+                if current_platform.is_fp8_fnuz():
+                    weight, weight_scale_inv, _ = \
+                        normalize_e4m3fn_to_e4m3fnuz(
+                            weight=layer.weight,
+                            weight_scale=layer.weight_scale_inv)
+                else:
+                    weight = layer.weight.data
+                    weight_scale_inv = layer.weight_scale_inv.data
+
+                weight = self._maybe_pad_weight(weight)
+
+                # Torch.compile cannot use Parameter subclasses.
+                layer.weight = Parameter(weight, requires_grad=False)
+                layer.weight_scale_inv = Parameter(weight_scale_inv,
+                                                   requires_grad=False)
 
         # If checkpoint not serialized fp8, quantize the weights.
         elif not self.quant_config.is_checkpoint_fp8_serialized:
-            qweight, weight_scale = ops.scaled_fp8_quant(layer.weight,
-                                                         scale=None)
+
+            # <abs> TensorRT-LLM FP8 Support
+            #
+            # qweight, weight_scale = ops.scaled_fp8_quant(layer.weight,
+            #                                              scale=None)
+
+            if IS_TRTLLM_AVAILABLE:
+                param_value = layer.weight.to(torch.float32)
+
+                fp8_min = torch.finfo(torch.float8_e4m3fn).min
+                fp8_max = torch.finfo(torch.float8_e4m3fn).max
+
+                max_abs = torch.amax(torch.abs(param_value))
+                scale = fp8_max / max_abs
+
+                @torch.compiler.disable()
+                def _quantize(param_value, scale, fp8_min, fp8_max):
+                    quantized_param = torch.clamp(
+                        param_value * scale,
+                        min=fp8_min,
+                        max=fp8_max,
+                    ).to(torch.float8_e4m3fn)
+                    # Transpose only when assigning to the weight parameter.
+                    # quantized_param = quantized_param.t()
+                    scale = scale.reshape(1, 1).reciprocal()
+                    return quantized_param, scale
+
+                qweight, weight_scale = _quantize(param_value, scale, fp8_min,
+                                                  fp8_max)
+            else:
+                qweight, weight_scale = ops.scaled_fp8_quant(layer.weight,
+                                                             scale=None)
+
+            # </abs>
 
             # Update the layer with the new values.
             layer.weight = Parameter(qweight.t(), requires_grad=False)
@@ -447,6 +665,22 @@ class Fp8LinearMethod(LinearMethodBase):
 
         if self.block_quant:
             assert self.quant_config.weight_block_size is not None
+
+            # <abs> TensorRT-LLM FP8 Support
+            #
+            if IS_TRTLLM_AVAILABLE:
+                return self.fp8_linear.apply(
+                    input=x,
+                    weight=layer.weight,
+                    weight_scale=layer.weight_scale,
+                    out_dtype=self.out_dtype,
+                    input_scale=layer.input_scale,
+                    bias=bias,
+                    # <abs> FP8 Block Alignment
+                    param_value_orig_shape=layer.param_value_orig_shape,
+                )
+
+            # </abs>
 
             return torch.ops.vllm.apply_w8a8_block_fp8_linear(
                 input=x,
