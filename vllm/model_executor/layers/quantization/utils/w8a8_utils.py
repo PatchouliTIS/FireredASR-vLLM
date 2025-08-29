@@ -18,6 +18,16 @@ from vllm.platforms import current_platform
 # <abs> TensorRT-LLM FP8 Support
 #
 try:
+    # Import xgrammar first to prevent TensorRT-LLM affecting the library
+    # linkage:
+    #
+    # *** Process received signal ***
+    # Signal: Segmentation fault (11)
+    # Signal code: Address not mapped (1)
+    # Failing at address: (nil)
+    # ...
+    # [ 2] /usr/local/lib/python3.12/dist-packages/tensorrt_llm/libs/libtensorrt_llm.so(_ZN8xgrammar19JSONSchemaConverter13AddBasicRulesEv+0x149d)[0x7f14e3feda9d]  # noqa: E501
+    import xgrammar  # isort: skip # noqa
     import tensorrt_llm  # noqa
 
     logger.warning("TensorRT-LLM is available!")
