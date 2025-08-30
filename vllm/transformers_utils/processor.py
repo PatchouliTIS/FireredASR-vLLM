@@ -86,6 +86,18 @@ def get_processor(
     **kwargs: Any,
 ) -> _P:
     """Load a processor for the given model name via HuggingFace."""
+    # <abs> use_fast=False
+    #
+    from loguru import logger
+
+    logger.warning(
+        "Creating a processor of type {processor_cls} and args={args}, "
+        "kwargs={kwargs}.",
+        args=args,
+        processor_cls=processor_cls,
+        kwargs=kwargs,
+    )
+    # </abs>
     if revision is None:
         revision = "main"
 
