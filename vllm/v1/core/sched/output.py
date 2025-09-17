@@ -134,7 +134,14 @@ class SchedulerOutput:
     # req_id -> encoder input indices that need processing.
     # E.g., if a request has [0, 1], it could mean the vision encoder needs
     # to process that the request's 0-th and 1-th images in the current step.
-    scheduled_encoder_inputs: dict[str, list[int]]
+
+    # <abs> Encoder Cache Sharing by MM Hash
+    #
+    # scheduled_encoder_inputs: dict[str, list[int]]
+    #
+    # req_id -> encoder input indices with mm_hash that need processing.
+    scheduled_encoder_inputs: dict[str, list[tuple[int, str]]]
+
     # Number of common prefix blocks for all requests in each KV cache group.
     # This can be used for cascade attention.
     num_common_prefix_blocks: list[int]
@@ -145,7 +152,13 @@ class SchedulerOutput:
     finished_req_ids: set[str]
     # list of (req_id, encoder_input_index) tuples.
     # Used to free the encoder cache.
-    free_encoder_input_ids: list[tuple[str, int]]
+
+    # <abs> Encoder Cache Sharing by MM Hash
+    #
+    # free_encoder_input_ids: list[tuple[str, int]]
+    # list of (mm_hash) tuples.
+    #
+    free_encoder_input_ids: list[str]
 
     # Dict of request ids to their index within the batch
     # for filling the next token bitmask

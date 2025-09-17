@@ -32,6 +32,11 @@ class CachedRequestState:
     req_id: str
     prompt_token_ids: list[int]
     mm_kwargs: list[MultiModalKwargsItem]
+
+    # <abs> Encoder Cache Sharing by MM Hash
+    #
+    mm_hashes: list[str]
+
     mm_positions: list[PlaceholderRange]
     sampling_params: Optional[SamplingParams]
     pooling_params: Optional[PoolingParams]

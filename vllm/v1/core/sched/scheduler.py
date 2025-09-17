@@ -190,7 +190,14 @@ class Scheduler(SchedulerInterface):
         num_scheduled_tokens: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
         # Encoder-related.
-        scheduled_encoder_inputs: dict[str, list[int]] = {}
+
+        # <abs> Encoder Cache Sharing by MM Hash
+        #
+        # scheduled_encoder_inputs: dict[str, list[int]] = {}
+        # req_id -> (mm_id, mm_hash)
+        #
+        scheduled_encoder_inputs: dict[str, list[tuple[int, str]]] = {}
+
         encoder_budget = self.max_num_encoder_input_tokens
         # Spec decode-related.
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
@@ -308,8 +315,17 @@ class Scheduler(SchedulerInterface):
 
             # Encoder-related.
             if encoder_inputs_to_schedule:
-                scheduled_encoder_inputs[request.request_id] = (
-                    encoder_inputs_to_schedule)
+
+                # <abs> Encoder Cache Sharing by MM Hash
+                #
+                # scheduled_encoder_inputs[request.request_id] = (
+                #     encoder_inputs_to_schedule)
+                #
+                scheduled_encoder_inputs[request.request_id] = [
+                    (mm_id, request.mm_hashes[mm_id])
+                    for mm_id in encoder_inputs_to_schedule
+                ]
+
                 # Allocate the encoder cache.
                 for i in encoder_inputs_to_schedule:
                     self.encoder_cache_manager.allocate(request, i)
@@ -508,8 +524,17 @@ class Scheduler(SchedulerInterface):
                     request.num_cached_tokens = num_computed_tokens
                 # Encoder-related.
                 if encoder_inputs_to_schedule:
-                    scheduled_encoder_inputs[request.request_id] = (
-                        encoder_inputs_to_schedule)
+
+                    # <abs> Encoder Cache Sharing by MM Hash
+                    #
+                    # scheduled_encoder_inputs[request.request_id] = (
+                    #     encoder_inputs_to_schedule)
+                    #
+                    scheduled_encoder_inputs[request.request_id] = [
+                        (mm_id, request.mm_hashes[mm_id])
+                        for mm_id in encoder_inputs_to_schedule
+                    ]
+
                     # Allocate the encoder cache.
                     for i in encoder_inputs_to_schedule:
                         self.encoder_cache_manager.allocate(request, i)
