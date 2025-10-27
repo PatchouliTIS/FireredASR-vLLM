@@ -8,6 +8,8 @@ from typing import Any, Optional, Union
 
 import numpy as np
 
+from vllm.engine.async_llm_engine import AsyncLLMEngine
+
 import vllm.envs as envs
 from vllm.config import ModelConfig, VllmConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
