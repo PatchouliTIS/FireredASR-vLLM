@@ -30,9 +30,9 @@ from vllm.logger import init_logger
 # yapf conflicts with isort for this block
 # yapf: disable
 from vllm.transformers_utils.configs import (ChatGLMConfig, DeepseekVLV2Config,
-                                             EAGLEConfig, JAISConfig,
-                                             KimiVLConfig, MedusaConfig,
-                                             MLPSpeculatorConfig,
+                                             EAGLEConfig, FireRedAsrConfig,
+                                             JAISConfig, KimiVLConfig,
+                                             MedusaConfig, MLPSpeculatorConfig,
                                              Nemotron_Nano_VL_Config,
                                              NemotronConfig, OvisConfig,
                                              RWConfig, SpeculatorsConfig,
@@ -70,6 +70,7 @@ def _get_hf_token() -> Optional[str]:
 _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = {
     "chatglm": ChatGLMConfig,
     "deepseek_vl_v2": DeepseekVLV2Config,
+    "fireredasr": FireRedAsrConfig,
     "kimi_vl": KimiVLConfig,
     "Llama_Nemotron_Nano_VL": Nemotron_Nano_VL_Config,
     "RefinedWeb": RWConfig,  # For tiiuae/falcon-40b(-instruct)
