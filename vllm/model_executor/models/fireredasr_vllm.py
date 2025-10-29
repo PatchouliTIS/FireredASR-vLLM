@@ -37,6 +37,7 @@ from vllm.multimodal.parse import (
     MultiModalFieldConfig,
     MultiModalProcessorBase,
 )
+from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.multimodal.processing import (
     BaseMultiModalProcessor,
     MultiModalDataDict,
@@ -74,13 +75,13 @@ class FireRedAsrInputs(TypedDict):
 
 class FireRedAsrProcessingInfo(BaseProcessingInfo):
     """Processing information for FireRedASR."""
-    
+
     def get_hf_config(self) -> PretrainedConfig:
         return FireRedAsrConfig.from_pretrained(self.ctx.model_config.model)
-    
+
     def get_supported_mm_limits(self) -> dict[str, Optional[int]]:
         return {"audio": None}  # No limit on number of audio inputs
-    
+
     def get_mm_max_tokens_per_item(self, seq_len: int) -> dict[str, int]:
         """Estimate max tokens per audio item."""
         hf_config = self.get_hf_config()
@@ -88,6 +89,53 @@ class FireRedAsrProcessingInfo(BaseProcessingInfo):
         # This is a rough estimate, actual value depends on audio duration
         max_audio_tokens = seq_len // hf_config.encoder_downsample_rate
         return {"audio": max_audio_tokens}
+
+
+class FireRedAsrDummyInputsBuilder(BaseDummyInputsBuilder[FireRedAsrProcessingInfo]):
+    """Dummy inputs builder for FireRedASR memory profiling."""
+
+    def get_dummy_text(self, mm_counts: dict[str, int]) -> str:
+        """Generate dummy text with speech placeholders."""
+        num_audios = mm_counts.get("audio", 0)
+
+        hf_config = self.info.get_hf_config()
+        speech_token = hf_config.default_speech_token
+
+        # Return speech tokens for each audio item
+        return speech_token * num_audios
+
+    def get_dummy_mm_data(
+        self,
+        seq_len: int,
+        mm_counts: dict[str, int],
+    ) -> MultiModalDataDict:
+        """Generate dummy audio data for memory profiling."""
+        num_audios = mm_counts.get("audio", 0)
+
+        hf_config = self.info.get_hf_config()
+
+        # Calculate audio length to maximize tokens
+        # We want to generate the worst-case scenario for memory profiling
+        # The number of tokens after processing is:
+        # audio_frames / encoder_downsample_rate / projector_downsample_rate
+        #
+        # To maximize tokens, we use a long audio duration
+        # Assuming 100 fps (frames per second) for fbank features
+        # and seq_len as target output tokens
+        fps = 100  # typical fbank feature rate
+        total_downsample = hf_config.encoder_downsample_rate * hf_config.projector_downsample_rate
+
+        # Calculate audio length that would result in seq_len tokens
+        # But cap it at a reasonable maximum (e.g., 30 seconds)
+        max_audio_frames = min(seq_len * total_downsample, 30 * fps)
+
+        # Convert frames to audio samples (assuming 16kHz sample rate)
+        sample_rate = 16000
+        audio_len = int((max_audio_frames / fps) * sample_rate)
+
+        return {
+            "audio": self._get_dummy_audios(length=audio_len, num_audios=num_audios)
+        }
 
 
 class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessingInfo]):
@@ -203,7 +251,7 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
         return [
             PromptReplacement(
                 modality="audio",
-                target=speech_token_id,
+                target=[speech_token_id],
                 replacement=get_replacement_fireredasr,
             )
         ]
@@ -296,6 +344,7 @@ class FireRedAsrProjector(nn.Module):
 @MULTIMODAL_REGISTRY.register_processor(
     FireRedAsrMultiModalProcessor,
     info=FireRedAsrProcessingInfo,
+    dummy_inputs=FireRedAsrDummyInputsBuilder,
 )
 class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
     """
