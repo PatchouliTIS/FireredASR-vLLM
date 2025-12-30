@@ -5,6 +5,7 @@ This module implements the vLLM integration for FireRedASR's LLM-based ASR model
 which uses a speech encoder + projector + Qwen2 LLM architecture.
 """
 import os
+from io import BytesIO
 from typing import Any, Iterable, List, Optional, Tuple, TypedDict, Union
 from collections.abc import Iterable, Mapping
 import torch
@@ -42,6 +43,7 @@ from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
 
 from .interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP, SupportsLoRA
+from .module_mapping import MultiModelKeys
 
 # Import FireRedASR components
 try:
@@ -197,15 +199,33 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
             "speech_lengths": MultiModalFieldConfig.batched("audio"),
         }
 
-    def _check_audio_files(self, audio_data: list[str]) -> bool:
-        """Check if the audio files exist."""
+    def _check_audio_data(self, audio_data: list) -> bool:
+        """Check if the audio data is valid (file paths or bytes/BytesIO)."""
         if audio_data is None or len(audio_data) == 0:
             return False
-        for audio_file in audio_data:
-            if audio_file == "":
+        for audio_item in audio_data:
+            if audio_item == "" or audio_item is None:
                 return False
-            expanded_path = os.path.expanduser(audio_file)
-            if not os.path.exists(expanded_path):
+            # Support file path strings
+            if isinstance(audio_item, str):
+                expanded_path = os.path.expanduser(audio_item)
+                if not os.path.exists(expanded_path):
+                    return False
+            # Support bytes and BytesIO
+            elif isinstance(audio_item, (bytes, BytesIO)):
+                # bytes/BytesIO data is valid if not empty
+                if isinstance(audio_item, bytes) and len(audio_item) == 0:
+                    return False
+                if isinstance(audio_item, BytesIO):
+                    # Check if BytesIO has content
+                    pos = audio_item.tell()
+                    audio_item.seek(0, 2)  # Seek to end
+                    size = audio_item.tell()
+                    audio_item.seek(pos)  # Restore position
+                    if size == 0:
+                        return False
+            else:
+                # Unsupported type
                 return False
         return True
         
@@ -236,9 +256,8 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
         # attention_mask = torch.tensor(encoded["attention_mask"])
 
         # Process audio data
-        # from fpdb import ForkedPdb; ForkedPdb().set_trace()
         audio_data = mm_data.get("audios", [])
-        is_valid = self._check_audio_files(audio_data)
+        is_valid = self._check_audio_data(audio_data)
         if not is_valid:
             return BatchFeature({
                 "speech_features": torch.empty(1,512, 80),
@@ -424,6 +443,35 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
 
     supports_multimodal: bool = True
 
+    # ============= LoRA Configuration =============
+    # These configurations are required for SupportsLoRA interface
+    # and must match the Qwen2 LLM backbone's LoRA target modules.
+
+    # packed_modules_mapping: Maps merged module names to their component modules.
+    # This tells vLLM which linear layers are packed together in the Qwen2 model.
+    # - qkv_proj: Query, Key, Value projections are merged into one linear layer
+    # - gate_up_proj: Gate and Up projections in MLP are merged together
+    packed_modules_mapping = {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+    }
+
+    # embedding_modules: Specifies embedding layers that can have LoRA applied.
+    # Key is the module name, value is "input" or "output" indicating the type.
+    # For FireRedASR, we typically don't apply LoRA to embeddings.
+    embedding_modules: dict[str, str] = {}
+
+    # embedding_padding_modules: List of embedding module names that require
+    # special padding handling during LoRA operations.
+    embedding_padding_modules: list[str] = []
+
     # Weight mapping from original FireRedASR checkpoint to vLLM model structure
     # This handles the prefix differences between training and inference
     hf_to_vllm_mapper = WeightsMapper(
@@ -601,6 +649,27 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
         Returns the underlying language model used for text generation.
         """
         return self.language_model
+
+    def get_mm_mapping(self) -> MultiModelKeys:
+        """
+        Get the module prefix mapping for multimodal models.
+
+        This method is required for LoRA support in multimodal models.
+        It tells vLLM's LoRA system which module prefixes correspond to
+        which components of the model, so LoRA weights can be correctly
+        applied to the language model portion.
+
+        Returns:
+            MultiModelKeys: A mapping of component types to their module prefixes.
+                - language_model: Prefix for the LLM backbone (Qwen2)
+                - connector: Prefix for the projector/adapter module
+                - tower_model: Prefix for the speech encoder
+        """
+        return MultiModelKeys.from_string_field(
+            language_model="language_model",  # Qwen2 LLM backbone
+            connector="projector",             # Speech-to-LLM projector/adapter
+            tower_model="speech_encoder",      # FireRedASR speech encoder
+        )
     
     def _validate_and_reshape_mm_tensor(
         self,
@@ -770,7 +839,6 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
                 input_ids, multimodal_embeddings
             )
             input_ids = None  # Don't use input_ids when using embeddings
-
         # Forward through language model
         hidden_states = self.language_model(
             input_ids=input_ids,
@@ -869,8 +937,6 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
             # Use vLLM's model loader to load LLM weights
             from vllm.model_executor.model_loader import get_model_loader
             from vllm.config import LoadConfig, ModelConfig
-
-            # from fpdb import ForkedPdb; ForkedPdb().set_trace()
 
             # Create a temporary ModelConfig for the LLM
             # Use tokenizer_path if available, otherwise fall back to llm_dir

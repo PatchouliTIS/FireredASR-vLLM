@@ -780,6 +780,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.seq_lens_np[:num_reqs] = (
             self.input_batch.num_computed_tokens_cpu[:num_reqs] +
             num_scheduled_tokens)
+        max_seq_len = self.seq_lens_np[:num_reqs].max().item()
 
         # Copy the tensors to the GPU.
         self.input_ids[:total_num_scheduled_tokens].copy_(
@@ -901,6 +902,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 num_reqs=num_reqs,
                 num_actual_tokens=total_num_scheduled_tokens,
+                max_seq_len=max_seq_len,
                 max_query_len=max_num_scheduled_tokens,
                 block_table_tensor=blk_table_tensor,
                 slot_mapping=slot_mapping,
@@ -2390,6 +2392,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     num_reqs=num_reqs,
                     num_actual_tokens=num_tokens,
                     max_query_len=max_query_len,
+                    max_seq_len=self.max_model_len,
                     block_table_tensor=self.input_batch.block_table[
                         kv_cache_group_id].get_device_tensor()[:num_reqs],
                     slot_mapping=self.input_batch.
@@ -3395,6 +3398,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 num_reqs=num_reqs,
                 num_actual_tokens=total_num_scheduled_tokens,
                 max_query_len=max_num_scheduled_tokens,
+                max_seq_len=self.seq_lens_cpu[:num_reqs].max().item(),
                 block_table_tensor=dummy_block_table,
                 slot_mapping=dummy_slot_mapping,
                 causal=False,

@@ -5,6 +5,7 @@ import kaldiio
 import kaldi_native_fbank as knf
 import numpy as np
 import torch
+from io import BytesIO
 
 
 class ASRFeatExtractor:
@@ -13,11 +14,14 @@ class ASRFeatExtractor:
         self.fbank = KaldifeatFbank(num_mel_bins=80, frame_length=25,
             frame_shift=10, dither=0.0)
 
-    def __call__(self, wav_paths):
+    def __call__(self, wav_datas):
         feats = []
         durs = []
-        for wav_path in wav_paths:
-            sample_rate, wav_np = kaldiio.load_mat(wav_path)
+        for wav_data in wav_datas:
+            if isinstance(wav_data, str):
+                sample_rate, wav_np = kaldiio.load_mat(wav_data)
+            elif isinstance(wav_data, BytesIO):
+                sample_rate, wav_np = kaldiio.wavio.read_wav(wav_data)
             dur = wav_np.shape[0] / sample_rate
             fbank = self.fbank((sample_rate, wav_np))
             if self.cmvn is not None:

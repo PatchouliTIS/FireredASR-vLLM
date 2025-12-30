@@ -4,6 +4,7 @@
 from abc import ABC, abstractmethod
 from collections import UserDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from io import BytesIO
 from typing import (TYPE_CHECKING, Any, Generic, Literal, NamedTuple, Optional,
                     TypeVar, Union)
 
@@ -366,6 +367,10 @@ class MultiModalDataParser:
             return audio, None
         if isinstance(audio, torch.Tensor):
             return audio.numpy(), None
+        # <patchy> Support bytes and BytesIO audio data
+        if isinstance(audio, (bytes, BytesIO)):
+            # Return as-is, will be processed by ASRFeatExtractor
+            return audio, None
 
         assert_never(audio)
 
@@ -395,6 +400,13 @@ class MultiModalDataParser:
             return AudioProcessorItems(data)
         if isinstance(data, str):
             return AudioProcessorItems([data])
+
+        # <patchy> Support bytes and BytesIO audio data
+        if isinstance(data, (bytes, BytesIO)):
+            return AudioProcessorItems([data])
+        if is_list_of(data, (bytes, BytesIO)):
+            return AudioProcessorItems(data)
+
         if self._is_empty(data) or (isinstance(data, tuple)
                                     and self._is_empty(data[0])):
             return None
