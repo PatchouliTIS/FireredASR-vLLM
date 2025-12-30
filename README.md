@@ -27,9 +27,9 @@ The current repo is a specialized adaptation tailored to the original FireredASR
 
 ## Getting Started
 
-1. Run `merge_lora_weights.py` under the directory of `FireRedASR-LLM-L` to get the complete Qwen2-7B LLM model with LoRA weights.
+1. Run `tools/merge_lora_weights.py` under the directory of `FireRedASR-LLM-L` to get the complete Qwen2-7B LLM model with LoRA weights.
 
-2. Run `save_tokenizer.py` to get the specific tokenizer of Qwen2-7B model.
+2. Run `tools/save_tokenizer.py` to get the specific tokenizer of Qwen2-7B model.
 
 3. Install vLLM with `pip` or [from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source):
 
