@@ -96,7 +96,7 @@ def batch_transcription_with_chunking():
     sampling_params = SamplingParams(
         temperature=0.1,
         max_tokens=2048,
-        # repetition_penalty=1.2,
+        repetition_penalty=1.05,
         top_p=1.0,
     )
 
