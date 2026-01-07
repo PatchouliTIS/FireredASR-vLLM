@@ -18,6 +18,8 @@ Easy, fast, and cheap LLM serving for everyone
 
 ## Summary
 
+**Based on vLLM-0.10.0**
+
 The current repo is a specialized adaptation tailored to the original FireredASR-LLM model architecture and input parameters, containing extensive hard-coded elements. Significant work remains to be done before it can be merged into the main vLLM branch:
 
 - [ ] Modify the FireredASR-LLM model files to match the standard loading procedure in vLLM
@@ -37,13 +39,12 @@ The current repo is a specialized adaptation tailored to the original FireredASR
 
 5. Install vLLM [from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source):
 
-    Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
+    Visit offical [documentation](https://docs.vllm.ai/en/latest/) to learn more.
 
 
 ## Simple Example
 
 See files `examples/fireredasr_vllm_example.py`
-
 
 ### Sampling Parameters
 
