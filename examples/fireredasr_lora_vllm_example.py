@@ -5,8 +5,7 @@ This example demonstrates how to use the FireRedASR model with vLLM
 for efficient speech-to-text transcription.
 
 IMPORTANT: Before running this example, ensure your model directory has a config.json file.
-You can create one using:
-    python fireredasr_setup_config.py /path/to/your/model/directory/
+The example config.json file is in the directory of `tools/fireredasr_config_template.json`.
 
 The model directory should contain:
 - config.json (FireRedASR configuration)
