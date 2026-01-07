@@ -31,13 +31,14 @@ The current repo is a specialized adaptation tailored to the original FireredASR
 
 2. Run `tools/save_tokenizer.py` to get the specific tokenizer of Qwen2-7B model.
 
-3. Install vLLM with `pip` or [from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source):
+3. Set the soft link of `Qwen2-7B-Instruct` under the directory of `FireRedASR-LLM-L` to `Qwen2-7B-Instruct-LoRA`.
+
+4. Copy the file `tools/fireredasr_config_template.json` to the directory of `FireRedASR-LLM-L` as `FireRedASR-LLM-L/config.json`.
+
+5. Install vLLM [from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source):
 
     Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
 
-  - [Installation](https://docs.vllm.ai/en/latest/getting_started/installation.html)
-  - [Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart.html)
-  - [List of Supported Models](https://docs.vllm.ai/en/latest/models/supported_models.html)
 
 ## Simple Example
 

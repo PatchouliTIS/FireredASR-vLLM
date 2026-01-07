@@ -1,0 +1,7 @@
+{
+  "model_type": "fireredasr",
+  "architectures": ["FireRedAsrForConditionalGeneration"],
+  "asr_type": "llm",
+  "encoder_downsample_rate": 2,
+  "speech_token_id": 151646
+}
