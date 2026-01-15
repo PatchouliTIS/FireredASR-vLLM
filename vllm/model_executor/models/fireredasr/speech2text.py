@@ -76,10 +76,10 @@ async def main(args):
             }
         )
 
-        # for result in results:
-        #     print(result)
-        #     if fout is not None:
-        #         fout.write(f"{result['uttid']}\t{result['text']}\n")
+        for result in results:
+            print(result)
+            if fout is not None:
+                fout.write(f"{result['uttid']}\t{result['text']}\n")
 
         batch_uttid = []
         batch_wav_path = []

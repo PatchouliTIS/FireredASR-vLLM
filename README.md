@@ -41,6 +41,11 @@ The current repo is a specialized adaptation tailored to the original FireredASR
 
     Visit offical [documentation](https://docs.vllm.ai/en/latest/) to learn more.
 
+    Recommended environment:
+    
+    - flash-attn==2.8.3
+    - torch==2.7.1
+
 
 ## Simple Example
 

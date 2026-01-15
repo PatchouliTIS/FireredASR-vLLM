@@ -553,6 +553,8 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
         llm_config = llm_vllm_config.model_config.hf_config
         llm_dim = llm_config.hidden_size
 
+        self._dtype = vllm_config.model_config.dtype
+        self._device_config = vllm_config.device_config
         # Initialize projector
         self.projector = FireRedAsrProjector(
             encoder_dim=encoder_dim,
@@ -560,8 +562,17 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
             downsample_rate=config.encoder_downsample_rate,
         )
 
-        self.projector.float().to(self.device)
-        self.speech_encoder.float().to(self.device)
+        # Move encoder and projector to the correct device with explicit FP32 dtype
+        # NOTE: We force FP32 here because:
+        # 1. The loaded weights from model.pth.tar may be in BFloat16/FP16
+        # 2. For full-precision inference, we need consistent FP32 throughout
+        # 3. Input speech_features from processor are typically FP32
+        # If you want half-precision inference, change torch.float32 to self._dtype
+        # self.projector.to(device=self.device, dtype=torch.float32)
+        # self.speech_encoder.to(device=self.device, dtype=torch.float32)
+        self.projector.to(device=self.device)
+        self.speech_encoder.to(device=self.device)
+
         self.projector.eval()
         self.speech_encoder.eval()
         self.language_model.eval()
@@ -732,6 +743,12 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
             speech_lengths=speech_lengths,
         )
     
+    def _get_autocast_dtype(self) -> Optional[torch.dtype]:
+        """Get the appropriate dtype for autocast based on model dtype."""
+        if self._dtype in (torch.float16, torch.bfloat16):
+            return self._dtype
+        return None  # No autocast needed for float32
+
     def get_multimodal_embeddings(
         self, **kwargs: object
     ) -> MultiModalEmbeddings:
@@ -749,22 +766,24 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
         speech_features = audio_inputs["speech_features"]
         speech_lengths = audio_inputs["speech_lengths"]
 
-        # Run encoder with inference mode if encoder is frozen
-        # This saves memory by not storing intermediate gradients
+        # Determine autocast settings based on model dtype
+        autocast_dtype = self._get_autocast_dtype()
+        use_autocast = autocast_dtype is not None
+        device_type = self._device_config.device_type
 
+        # Run encoder and projector with autocast for mixed precision
+        # This handles dtype conversion automatically when model is in fp16/bf16
         with torch.inference_mode():
-            encoder_outputs, output_lengths, encoder_mask = self.speech_encoder(
-                speech_features, speech_lengths
-            )
+            with torch.autocast(device_type=device_type, dtype=autocast_dtype, enabled=use_autocast):
+                # Run encoder
+                encoder_outputs, output_lengths, encoder_mask = self.speech_encoder(
+                    speech_features, speech_lengths
+                )
 
-        # Explicitly delete encoder mask to free memory immediately
-        # del encoder_mask
-
-        # Run projector
-        with torch.inference_mode():
-            projected_features, projected_lengths = self.projector(
-                encoder_outputs, output_lengths
-            )
+                # Run projector
+                projected_features, projected_lengths = self.projector(
+                    encoder_outputs, output_lengths
+                )
 
         # Delete encoder outputs after projector to free memory
         # del encoder_outputs
@@ -948,6 +967,7 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
                 trust_remote_code=True,
                 dtype=self.vllm_config.model_config.dtype,
                 seed=self.vllm_config.model_config.seed,
+                quantization=self.vllm_config.model_config.quantization,
             )
 
             # Create LoadConfig
